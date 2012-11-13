@@ -6,7 +6,7 @@ fmt:
 	go fmt ./...
 
 clean:
-	git clean -xdf
+	git clean -df
 
 ########### local build:
 
