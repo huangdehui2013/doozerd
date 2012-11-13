@@ -36,7 +36,7 @@ local_build: $(LOCAL_GOPATH)/src/github.com/soundcloud/doozer $(LOCAL_GOPATH)/sr
 	-GOPATH=$(LOCAL_GOPATH) ./make.sh
 	 GOPATH=$(LOCAL_GOPATH) go build -o doozerd
 	 GOPATH=$(LOCAL_GOPATH) go test -cpu 2 -v ./...
-	 cd $(DOOZER_GO_PATH); printf 'package main\n\nconst version = `%s`\n' '$$(VERSION)' > vers.go; GOPATH=$(LOCAL_GOPATH) go build; cp doozer $(LOCAL_GOPATH)/../; cd -
+	 cd $(DOOZER_GO_PATH); printf 'package main\n\nconst version = `%s`\n' "$(VERSION)" > vers.go; GOPATH=$(LOCAL_GOPATH) go build; cp doozer $(LOCAL_GOPATH)/../; cd -
 
 
 ########## packaging
@@ -44,7 +44,7 @@ FPM_EXECUTABLE:=$$(dirname $$(dirname $$(gem which fpm)))/bin/fpm
 FPM_ARGS=-t deb -m 'Doozerd authors (see page), Daniel Bornkessel <daniel@soundcloud.com> (packaging)' --url http://github.com/soundcloud/doozerd -s dir
 FAKEROOT=fakeroot
 RELEASE=$$(cat .release 2>/dev/null || echo "0")
-VERSION:=$$(GIT_DIR=$${PWD}/.git $${PWD}/version.sh | sed 's/+.*//g')
+VERSION:=$$(GIT_DIR=$${PWD}/.git $${PWD}/version.sh | tr '+' '.')
 
 package: local_build
 	rm -rf $(FAKEROOT)
