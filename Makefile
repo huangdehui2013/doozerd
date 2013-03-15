@@ -11,7 +11,7 @@ fmt:
 	go fmt ./...
 
 clean:
-	git clean -xdf
+	git clean -df
 
 ########### local build:
 
@@ -19,11 +19,10 @@ LOCAL_GOPATH=${PWD}/.go_path
 DOOZERD_GO_PATH=$(LOCAL_GOPATH)/src/github.com/soundcloud/doozerd
 DOOZER_GO_PATH=$(LOCAL_GOPATH)/src/github.com/soundcloud/doozer/cmd/doozer
 
-unexport GIT_DIR
-
 build: fmt package bump_package_release
 	echo ".git" > .pkgignore
 	find . -mindepth 1 -maxdepth 1 | grep -v "\.deb" | sed 's/\.\///g' >> .pkgignore
+	test -z "$(REPREPRO_SSH)" || for d in $$(ls *.deb); do cat $$d | ssh -o 'StrictHostKeyChecking=no' $(REPREPRO_SSH) reprepro-add; done
 
 $(LOCAL_GOPATH)/src:
 	mkdir -p $(LOCAL_GOPATH)/src
@@ -41,7 +40,7 @@ local_build: $(LOCAL_GOPATH)/src/github.com/soundcloud/doozer $(LOCAL_GOPATH)/sr
 	-GOPATH=$(LOCAL_GOPATH) ./make.sh
 	 GOPATH=$(LOCAL_GOPATH) go build -o doozerd
 	 GOPATH=$(LOCAL_GOPATH) go test -cpu 2 -v ./...
-	 cd $(DOOZER_GO_PATH); printf 'package main\n\nconst version = `%s`\n' '$$(VERSION)' > vers.go; GOPATH=$(LOCAL_GOPATH) go build; cp doozer $(LOCAL_GOPATH)/../; cd -
+	 cd $(DOOZER_GO_PATH); printf 'package main\n\nconst version = `%s`\n' "$(VERSION)" > vers.go; GOPATH=$(LOCAL_GOPATH) go build; cp doozer $(LOCAL_GOPATH)/../; cd -
 
 
 ########## packaging
@@ -49,7 +48,10 @@ FPM_EXECUTABLE:=$$(dirname $$(dirname $$(gem which fpm)))/bin/fpm
 FPM_ARGS=-t deb -m 'Doozerd authors (see page), Daniel Bornkessel <daniel@soundcloud.com> (packaging)' --url http://github.com/soundcloud/doozerd -s dir
 FAKEROOT=fakeroot
 RELEASE=$$(cat .release 2>/dev/null || echo "0")
-VERSION:=$$(GIT_DIR=$${PWD}/.git $${PWD}/version.sh | sed 's/+.*//g')
+# this is needed for a push to an empty get repo, when git describe is not working yet
+FALLBACK_VERSION=8.51.0
+# oh my: please forgive me:
+VERSION:=$$({ { git describe >/dev/null 2>/dev/null && $(PWD)/version.sh; } || echo "$(FALLBACK_VERSION)"; } | tr '+' '.' | sed 's/^\.mod$$/$(FALLBACK_VERSION)/g')
 
 package: local_build
 	rm -rf $(FAKEROOT)
@@ -59,7 +61,7 @@ package: local_build
 	rm -rf *.deb
 
 	$(FPM_EXECUTABLE) -n "doozerd" \
-		-C $(FAKEROOT) \
+		-C $(PWD)/$(FAKEROOT) \
 		--description "doozerd" \
 		$(FPM_ARGS) -t deb -v $(VERSION) --iteration $(RELEASE) .;
 
