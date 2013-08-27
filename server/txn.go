@@ -7,7 +7,11 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strings"
 	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type txn struct {
@@ -38,8 +42,8 @@ const (
 )
 
 func (t *txn) run() {
-	// verb := proto.GetInt32((*int32)(t.req.Verb))
 	verb := int32(t.req.GetVerb())
+
 	if f, ok := ops[verb]; ok {
 		f(t)
 	} else {
@@ -48,13 +52,17 @@ func (t *txn) run() {
 }
 
 func (t *txn) get() {
+	trace := t.instrumentVerb()
+
 	if !t.c.raccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if t.req.Path == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
@@ -62,12 +70,14 @@ func (t *txn) get() {
 		g, err := t.getter()
 		if err != nil {
 			t.respondOsError(err)
+			trace("eunknown")
 			return
 		}
 
 		v, rev := g.Get(*t.req.Path)
 		if rev == store.Dir {
 			t.respondErrCode(response_ISDIR)
+			trace("eisdir")
 			return
 		}
 
@@ -76,22 +86,28 @@ func (t *txn) get() {
 			t.resp.Value = []byte(v[0])
 		}
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) set() {
+	trace := t.instrumentVerb()
+
 	if !t.c.waccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if !t.c.canWrite {
 		t.respondErrCode(response_READONLY)
+		trace("ereadonly")
 		return
 	}
 
 	if t.req.Path == nil || t.req.Rev == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
@@ -99,26 +115,33 @@ func (t *txn) set() {
 		ev := consensus.Set(t.c.p, *t.req.Path, t.req.Value, *t.req.Rev)
 		if ev.Err != nil {
 			t.respondOsError(ev.Err)
+			trace("eunknown")
 			return
 		}
 		t.resp.Rev = &ev.Seqn
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) del() {
+	trace := t.instrumentVerb()
+
 	if !t.c.waccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if !t.c.canWrite {
 		t.respondErrCode(response_READONLY)
+		trace("ereadonly")
 		return
 	}
 
 	if t.req.Path == nil || t.req.Rev == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
@@ -126,38 +149,51 @@ func (t *txn) del() {
 		ev := consensus.Del(t.c.p, *t.req.Path, *t.req.Rev)
 		if ev.Err != nil {
 			t.respondOsError(ev.Err)
+			trace("eunknown")
 			return
 		}
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) nop() {
+	trace := t.instrumentVerb()
+
 	if !t.c.waccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if !t.c.canWrite {
 		t.respondErrCode(response_READONLY)
+		trace("ereadonly")
 		return
 	}
 
 	go func() {
 		t.c.p.Propose([]byte(store.Nop))
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) rev() {
+	trace := t.instrumentVerb()
+
 	rev := <-t.c.st.Seqns
 	t.resp.Rev = &rev
 	t.respond()
+	trace("success")
 }
 
 func (t *txn) stat() {
+	trace := t.instrumentVerb()
+
 	if !t.c.raccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
@@ -165,6 +201,7 @@ func (t *txn) stat() {
 		g, err := t.getter()
 		if err != nil {
 			t.respondOsError(err)
+			trace("eunknown")
 			return
 		}
 
@@ -172,17 +209,22 @@ func (t *txn) stat() {
 		t.resp.Len = &len
 		t.resp.Rev = &rev
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) getdir() {
+	trace := t.instrumentVerb()
+
 	if !t.c.raccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if t.req.Path == nil || t.req.Offset == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
@@ -190,16 +232,19 @@ func (t *txn) getdir() {
 		g, err := t.getter()
 		if err != nil {
 			t.respondOsError(err)
+			trace("eunknown")
 			return
 		}
 
 		ents, rev := g.Get(*t.req.Path)
 		if rev == store.Missing {
 			t.respondErrCode(response_NOENT)
+			trace("enoent")
 			return
 		}
 		if rev != store.Dir {
 			t.respondErrCode(response_NOTDIR)
+			trace("enotdir")
 			return
 		}
 
@@ -207,34 +252,42 @@ func (t *txn) getdir() {
 		offset := int(*t.req.Offset)
 		if offset < 0 || offset >= len(ents) {
 			t.respondErrCode(response_RANGE)
+			trace("erange")
 			return
 		}
 
 		t.resp.Path = &ents[offset]
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) wait() {
+	trace := t.instrumentVerb()
+
 	if !t.c.raccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if t.req.Path == nil || t.req.Rev == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
 	glob, err := store.CompileGlob(*t.req.Path)
 	if err != nil {
 		t.respondOsError(err)
+		trace("eunknown")
 		return
 	}
 
 	ch, err := t.c.st.Wait(glob, *t.req.Rev)
 	if err != nil {
 		t.respondOsError(err)
+		trace("eunknown")
 		return
 	}
 
@@ -252,29 +305,36 @@ func (t *txn) wait() {
 			t.resp.Flags = proto.Int32(0)
 		}
 		t.respond()
+		trace("success")
 	}()
 }
 
 func (t *txn) walk() {
+	trace := t.instrumentVerb()
+
 	if !t.c.raccess {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 		return
 	}
 
 	if t.req.Path == nil || t.req.Offset == nil {
 		t.respondErrCode(response_MISSING_ARG)
+		trace("emissingarg")
 		return
 	}
 
 	glob, err := store.CompileGlob(*t.req.Path)
 	if err != nil {
 		t.respondOsError(err)
+		trace("eunknown")
 		return
 	}
 
 	offset := *t.req.Offset
 	if offset < 0 {
 		t.respondErrCode(response_RANGE)
+		trace("erange")
 		return
 	}
 
@@ -282,6 +342,7 @@ func (t *txn) walk() {
 		g, err := t.getter()
 		if err != nil {
 			t.respondOsError(err)
+			trace("eunknown")
 			return
 		}
 
@@ -292,6 +353,7 @@ func (t *txn) walk() {
 				t.resp.Rev = &rev
 				t.resp.Flags = proto.Int32(set)
 				t.respond()
+				trace("success")
 				return true
 			}
 			offset--
@@ -299,15 +361,20 @@ func (t *txn) walk() {
 		}
 		if !store.Walk(g, glob, f) {
 			t.respondErrCode(response_RANGE)
+			trace("erange")
 		}
 	}()
 }
 
 func (t *txn) access() {
+	trace := t.instrumentVerb()
+
 	if t.c.grant(string(t.req.Value)) {
 		t.respond()
+		trace("success")
 	} else {
 		t.respondOsError(syscall.EACCES)
+		trace("eacces")
 	}
 }
 
@@ -353,4 +420,35 @@ func (t *txn) getter() (store.Getter, error) {
 		return nil, err
 	}
 	return <-ch, nil
+}
+
+func (t *txn) instrumentVerb() func(string) {
+	start := time.Now()
+
+	return func(result string) {
+		verb := t.req.GetVerb().String()
+		if verb == "" {
+			verb = "unknown"
+		} else {
+			verb = strings.ToLower(verb)
+		}
+
+		host := t.c.addr
+		parts := strings.Split(host, ":")
+		if len(parts) != 2 {
+			host = "unknown"
+		} else {
+			host = parts[0]
+		}
+
+		dur := float64(time.Since(start) / time.Microsecond)
+
+		txnLatencies.Add(map[string]string{"verb": verb, "host": host, "result": result}, dur)
+	}
+}
+
+var txnLatencies = prometheus.NewDefaultHistogram()
+
+func init() {
+	prometheus.Register("doozerd_txn_latencies_micros", "Transaction latencies in microseconds partitioned by operation, host, and outcome.", prometheus.NilLabels, txnLatencies)
 }

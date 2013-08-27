@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"text/template"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var Store *store.Store
@@ -42,6 +44,7 @@ func Serve(listener net.Listener) {
 	http.Handle("/$main.js", stringHandler{"application/javascript", main_js})
 	http.Handle("/$main.css", stringHandler{"text/css", main_css})
 	http.HandleFunc("/$events/", evServer)
+	http.Handle(prometheus.ExpositionResource, prometheus.DefaultHandler)
 
 	http.Serve(listener, nil)
 }

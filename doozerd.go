@@ -9,6 +9,7 @@ import (
 	"github.com/soundcloud/doozerd/peer"
 	"log"
 	"net"
+	_ "net/http/pprof"
 	"os"
 	"strconv"
 )
