@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // ListenAndServe listens on l, accepts network connections, and
@@ -16,12 +18,16 @@ func ListenAndServe(l net.Listener, canWrite chan bool, st *store.Store, p conse
 		c, err := l.Accept()
 		if err != nil {
 			if err == syscall.EINVAL {
+				conEvents.Increment(map[string]string{"ev": "invalid"})
 				break
 			}
 			if e, ok := err.(*net.OpError); ok && e.Err == syscall.EINVAL {
+				conEvents.Increment(map[string]string{"ev": "invalid"})
 				break
 			}
 			log.Println(err)
+			conEvents.Increment(map[string]string{"ev": "unknown"})
+
 			continue
 		}
 
@@ -32,6 +38,7 @@ func ListenAndServe(l net.Listener, canWrite chan bool, st *store.Store, p conse
 		default:
 		}
 
+		conEvents.Increment(map[string]string{"ev": "accepted"})
 		go serve(c, st, p, w, rwsk, rosk)
 	}
 }
@@ -50,4 +57,10 @@ func serve(nc net.Conn, st *store.Store, p consensus.Proposer, w bool, rwsk, ros
 	c.grant("") // start as if the client supplied a blank password
 	c.serve()
 	nc.Close()
+}
+
+var conEvents = prometheus.NewCounter()
+
+func init() {
+	prometheus.Register("doozerd_connection_events_total", "Received connection events sum.", prometheus.NilLabels, conEvents)
 }

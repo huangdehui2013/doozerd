@@ -1,4 +1,5 @@
 deps:
+	go get -d .
 	go get code.google.com/p/goprotobuf/proto
 	go get code.google.com/p/go.net/websocket
 
